@@ -1,6 +1,7 @@
 <?php
 /**
  *  PNG压缩，覆盖原图片。需要安装pngquant
+ *
  * @param $png_path
  * @param int $max_quality
  * @throws Exception
@@ -13,6 +14,7 @@ function compress_png_inplace($png_path, $max_quality = 90)
 
 /**
  * JPG压缩，覆盖原图片。需要安装jpegoptim
+ *
  * @param $jpg_path
  * @param int $max_quality
  */
@@ -23,6 +25,7 @@ function compress_jpg_inplace($jpg_path, $max_quality = 90)
 
 /**
  * BMP转JPG。需要安装imagemagick
+ *
  * @param $bmp_path
  * @return string
  */

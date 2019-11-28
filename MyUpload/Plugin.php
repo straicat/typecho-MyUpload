@@ -2,30 +2,27 @@
 if (!defined('__TYPECHO_ROOT_DIR__')) exit;
 
 /**
- * 更安全的文件名。图片自动压缩。
+ * 图片自动压缩，自定义上传目录。
  *
  * @package MyUpload
  * @author jlice
- * @version 1.0.0
- * @link https://jlice.top/
+ * @version 1.2.0
+ * @link https://github.com/jlice/typecho-MyUpload
  */
-
 include_once "functions.php";
-
 
 class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface, Widget_Interface_Do
 {
     // 图片文件后缀
     const IMG_EXT = array("jpg", "jpeg", "png");
 
-/**
- * 启用插件方法,如果启用失败,直接抛出异常
- *
- * @static
- * @access public
- * @return void
- * @throws Typecho_Plugin_Exception
- */
+    /**
+     * 启用插件方法,如果启用失败,直接抛出异常
+     *
+     * @static
+     * @access public
+     * @return void
+     */
     public static function activate()
     {
         Typecho_Plugin::factory('Widget_Upload')->uploadHandle = array('MyUpload_Plugin', 'uploadHandle');
@@ -38,7 +35,6 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
      * @static
      * @access public
      * @return void
-     * @throws Typecho_Plugin_Exception
      */
     public static function deactivate()
     {
@@ -60,10 +56,10 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
         $form->addInput($compress_larger);
 
         $upload_subdir = new Typecho_Widget_Helper_Form_Element_Radio('upload_subdir',
-            array('root'=> '将图片上传到上传路径根目录',
-                  'year'=> '将图片上传到上传路径下的年目录',
-                  'month'=> '将图片上传到上传路径下的年月目录'),
-            'year', _t('图片上传路径'));
+            array('year' => '年目录',
+                'month' => '年月目录',
+                'origin' => 'Typecho默认'),
+            'origin', _t('图片上传路径'), _t('前两项会使用优化的图片重命名策略'));
         $form->addInput($upload_subdir);
     }
 
@@ -116,6 +112,11 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
         return isset($info['extension']) ? strtolower($info['extension']) : '';
     }
 
+    /**
+     * 优化的图片重命名策略
+     *
+     * @return string
+     */
     public static function generateFilename()
     {
         return sprintf('%s', base_convert(uniqid(), 16, 36));
@@ -123,6 +124,7 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
 
     /**
      * 压缩图片
+     *
      * @param $path
      * @throws Exception
      */
@@ -141,7 +143,7 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
                 compress_jpg_inplace($path);
             }
 
-            // 清除文件信息缓存
+            // 清除文件信息缓存，以获得正确的图片大小
             clearstatcache();
         }
     }
@@ -164,12 +166,12 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
 
         $date = new Typecho_Date();
 
-        $upload_subdir = htmlspecialchars(Typecho_Widget::widget('Widget_Options')->plugin('MyUpload')->upload_subdir);
-        if ($upload_subdir === 'root') {
+        $subdir_opt = htmlspecialchars(Typecho_Widget::widget('Widget_Options')->plugin('MyUpload')->upload_subdir);
+        if ($subdir_opt === 'root') {
             $upload_subdir = '';
-        } elseif ($upload_subdir === 'year') {
+        } elseif ($subdir_opt === 'year') {
             $upload_subdir = '/' . $date->year;
-        } elseif ($upload_subdir === 'month') {
+        } else {
             $upload_subdir = '/' . $date->year . '/' . $date->month;
         }
 
@@ -186,7 +188,11 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
         }
 
         //获取文件名
-        $fileName = self::generateFilename() . '.' . $ext;
+        if ($subdir_opt == 'origin') {
+            $fileName = sprintf('%u', crc32(uniqid())) . '.' . $ext;
+        } else {
+            $fileName = self::generateFilename() . '.' . $ext;
+        }
         $path = $path . '/' . $fileName;
 
         if (isset($file['tmp_name'])) {
@@ -213,7 +219,7 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
         return array(
             'name' => $file['name'],
             'path' => (defined('__TYPECHO_UPLOAD_DIR__') ? __TYPECHO_UPLOAD_DIR__ : self::UPLOAD_DIR)
-                . $upload_subdir .  '/' . $fileName,
+                . $upload_subdir . '/' . $fileName,
             'size' => $file['size'],
             'type' => $ext,
             'mime' => Typecho_Common::mimeContentType($path)
