@@ -5,16 +5,18 @@ if (!defined('__TYPECHO_ROOT_DIR__')) exit;
  * 图片自动压缩，自定义上传目录。
  *
  * @package MyUpload
- * @author jlice
- * @version 1.2.0
- * @link https://github.com/jlice/typecho-MyUpload
+ * @author 文剑木然
+ * @version 1.5.0
+ * @link https://jlice.top
  */
 include_once "functions.php";
 
-class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface, Widget_Interface_Do
+class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface
 {
     // 图片文件后缀
     const IMG_EXT = array("jpg", "jpeg", "png");
+    // TinyPNG API URL
+    const TINIFY_URL = 'https://api.tinify.com/shrink';
 
     /**
      * 启用插件方法,如果启用失败,直接抛出异常
@@ -52,14 +54,24 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
     public static function config(Typecho_Widget_Helper_Form $form)
     {
         $compress_larger = new Typecho_Widget_Helper_Form_Element_Text('compress_larger', NULL, '50',
-            _t('图片压缩大小阈值'), _t('当图片大小超过此值（单位：KB）时，对图片进行压缩。（仅压缩jpg和png）'));
+            _t('图片压缩大小阈值'), _t('当图片大小超过此值（单位：KB）时，对图片进行压缩。（仅压缩 jpg 和 png ）<br/>
+如果使用云主机，须安装 <code>jpegoptim</code> 和 <code>pngquant</code>，不要填 TinyPNG API Key！<br/>
+Ubuntu 系统下安装方法：<code>sudo apt install jpegoptim pngquant</code>'));
         $form->addInput($compress_larger);
+
+        $apiKey = new Typecho_Widget_Helper_Form_Element_Text('apiKey', NULL, NULL,
+            _t('TinyPNG API Key'),
+            _t('如果使用虚拟主机，采用图片远程压缩。须先到 
+<a href="https://tinypng.com/developers">https://tinypng.com/developers</a> 注册。<br/>
+图片远程压缩速度很慢，请耐心等待。'));
+        $form->addInput($apiKey);
 
         $upload_subdir = new Typecho_Widget_Helper_Form_Element_Radio('upload_subdir',
             array('year' => '年目录',
                 'month' => '年月目录',
                 'origin' => 'Typecho默认'),
-            'origin', _t('图片上传路径'), _t('前两项会使用优化的图片重命名策略'));
+            'origin', _t('图片上传路径'), _t('前两项会使用优化的图片重命名策略<hr>
+GitHub: <a href="https://github.com/jlice/typecho-MyUpload">https://github.com/jlice/typecho-MyUpload</a>'));
         $form->addInput($upload_subdir);
     }
 
@@ -149,6 +161,28 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
     }
 
     /**
+     * 远程压缩图片
+     *
+     * @param $bytes
+     * @param $client
+     * @return bool
+     * @throws Typecho_Http_Client_Exception
+     */
+    public static function remoteCompressImage($bytes, $client) {
+        if (!$client) return false;
+        $client->setData($bytes);
+        $client->setTimeout(60);
+        $responseBody = $client->send(self::TINIFY_URL);
+        if ($responseBody && ($responseBody = json_decode($responseBody))) {
+            if ($picUrl = $responseBody->output->url) {
+                $client->setMethod(Typecho_Http_Client::METHOD_GET);
+                return $client->send($picUrl);
+            }
+        }
+        return false;
+    }
+
+    /**
      * 上传文件处理函数,如果需要实现自己的文件哈希或者特殊的文件系统,请在options表里把uploadHandle改成自己的函数
      *
      * @access public
@@ -195,23 +229,66 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
         }
         $path = $path . '/' . $fileName;
 
-        if (isset($file['tmp_name'])) {
+        $apiKey = Typecho_Widget::widget('Widget_Options')->plugin('MyUpload')->apiKey;
+        if ($apiKey) {
+            $client = Typecho_Http_Client::get();
+            if ($client) {
+                $client->setHeader('Authorization', 'Basic ' . base64_encode('api:' . $apiKey));
+            }
+        }
 
-            //移动上传文件
-            if (!@move_uploaded_file($file['tmp_name'], $path)) {
-                return false;
+        if (isset($file['tmp_name'])) {
+            // 使用远程图片压缩
+            $remoteCompress = false;
+            if (isset($client) && $client) {
+                // 读取图片
+                $fileHandler = fopen($file['tmp_name'], 'rb');
+                $fileBytes = fread($fileHandler, filesize($file['tmp_name']));
+                fclose($fileHandler);
+                // 执行远程压缩
+                try {
+                    $picBytes = self::remoteCompressImage($fileBytes, $client);
+                } catch (Typecho_Http_Client_Exception $exception) {}
+
+                $remoteCompress = isset($picBytes) && $picBytes && file_put_contents($path, $picBytes);
+            }
+
+            // 如果远程压缩失败，放弃压缩
+            if (!$remoteCompress) {
+                //移动上传文件
+                if (!@move_uploaded_file($file['tmp_name'], $path)) {
+                    return false;
+                }
             }
         } else if (isset($file['bytes'])) {
+            // 似乎不会到这里
 
-            //直接写入文件
-            if (!file_put_contents($path, $file['bytes'])) {
-                return false;
+            // 使用远程图片压缩
+            $remoteCompress = false;
+            if (isset($client) && $client) {
+                // 执行远程压缩
+                try {
+                    $picBytes = self::remoteCompressImage($file['bytes'], $client);
+                } catch (Typecho_Http_Client_Exception $exception) {}
+
+                $remoteCompress = isset($picBytes) && $picBytes && file_put_contents($path, $picBytes);
+            }
+
+            // 如果远程压缩失败，放弃压缩
+            if (!$remoteCompress) {
+                //直接写入文件
+                if (!file_put_contents($path, $file['bytes'])) {
+                    return false;
+                }
             }
         } else {
             return false;
         }
 
-        self::compressImage($path);
+        // 如果没有填写 apiKey，采取本地命令行压缩
+        if (empty($apiKey)) {
+            self::compressImage($path);
+        }
         $ext = strtolower(pathinfo($path)['extension']);
         $file['size'] = filesize($path);
 
@@ -254,27 +331,70 @@ class MyUpload_Plugin extends Widget_Upload implements Typecho_Plugin_Interface,
             }
         }
 
+        $apiKey = Typecho_Widget::widget('Widget_Options')->plugin('MyUpload')->apiKey;
+        if ($apiKey) {
+            $client = Typecho_Http_Client::get();
+            if ($client) {
+                $client->setHeader('Authorization', 'Basic ' . base64_encode('api:' . $apiKey));
+            }
+        }
+
         if (isset($file['tmp_name'])) {
 
             @unlink($path);
 
-            //移动上传文件
-            if (!@move_uploaded_file($file['tmp_name'], $path)) {
-                return false;
+            // 使用远程图片压缩
+            $remoteCompress = false;
+            if (isset($client) && $client) {
+                // 读取图片
+                $fileHandler = fopen($file['tmp_name'], 'rb');
+                $fileBytes = fread($fileHandler, filesize($file['tmp_name']));
+                fclose($fileHandler);
+                // 执行远程压缩
+                try {
+                    $picBytes = self::remoteCompressImage($fileBytes, $client);
+                } catch (Typecho_Http_Client_Exception $exception) {}
+
+                $remoteCompress = isset($picBytes) && $picBytes && file_put_contents($path, $picBytes);
+            }
+
+            // 如果远程压缩失败，放弃压缩
+            if (!$remoteCompress) {
+                //移动上传文件
+                if (!@move_uploaded_file($file['tmp_name'], $path)) {
+                    return false;
+                }
             }
         } else if (isset($file['bytes'])) {
 
             @unlink($path);
 
-            //直接写入文件
-            if (!file_put_contents($path, $file['bytes'])) {
-                return false;
+            // 使用远程图片压缩
+            $remoteCompress = false;
+            if (isset($client) && $client) {
+                // 执行远程压缩
+                try {
+                    $picBytes = self::remoteCompressImage($file['bytes'], $client);
+                } catch (Typecho_Http_Client_Exception $exception) {}
+
+                $remoteCompress = isset($picBytes) && $picBytes && file_put_contents($path, $picBytes);
+            }
+
+            // 如果远程压缩失败，放弃压缩
+            if (!$remoteCompress) {
+                //直接写入文件
+                if (!file_put_contents($path, $file['bytes'])) {
+                    return false;
+                }
             }
         } else {
             return false;
         }
 
-        self::compressImage($path);
+        // 如果没有填写 apiKey，采取本地命令行压缩
+        if (empty($apiKey)) {
+            self::compressImage($path);
+        }
         $file['size'] = filesize($path);
 
         //返回相对存储路径
